@@ -1,14 +1,18 @@
 // ==UserScript==
 // @id             ST3-yadg
-// @name           ST3-YADG
+// @name           SyntheSiz3r.com - YADG
 // @description    This script provides integration with online description generator YADG (http://yadg.cc)
-// @version        1.3.0
+// @license        https://github.com/Slack06/yadg-userscript/blob/master/LICENSE
+// @version        1.3.9
 // @namespace      yadg
 // @grant          GM_xmlhttpRequest
 // @require        https://yadg.cc/static/js/jsandbox.min.js
 // @include        http*://*synthesiz3r.com/upload.php*
 // @include        http*://*synthesiz3r.com/requests.php*
 // @include        http*://*synthesiz3r.com/torrents.php*
+// @include        http*://*waffles.ch/upload.php*
+// @include        http*://*waffles.ch/requests.php*
+// @downloadURL    https://github.com/XMaTriX-st3/st3/edit/master/st3_yadg.user.js
 // ==/UserScript==
 
 // --------- USER SETTINGS START ---------
@@ -17,7 +21,8 @@
  Here you can set site specific default templates.
  You can find a list of available templates at: https://yadg.cc/api/v2/templates/
 */
-var defaultST3Format = 6;
+var defaultST3Format = 5,
+    defaultWafflesFormat = 9;
 
 // --------- USER SETTINGS END ---------
 
@@ -251,7 +256,7 @@ function requester(url, method, callback, data, error_callback) {
     }
 
     this.send = function() {
-        details = {
+        var details = {
             url : this.url,
             method : this.method,
             onload : function(response) {
@@ -297,7 +302,10 @@ var yadg_sandbox = {
                 if (response.status === 200) {
                     script = response.responseText;
                     var blob = new Blob([script], {type: 'application/javascript'});
-                    var URL = window.webkitURL || window.URL;
+                    var URL = window.URL || window.webkitURL;
+                    if (!URL || !URL.createObjectURL) {
+                        throw new Error('No no valid implementation of window.URL.createObjectURL found.');
+                    }
                     dataURL = URL.createObjectURL(blob);
                     yadg_sandbox.initCallback(dataURL);
                     yadg_sandbox.loadSwig(callback);
@@ -350,7 +358,7 @@ var yadg_sandbox = {
     },
 
     renderTemplate : function(template, data, callback, error) {
-        eval_string = "myswig.render(input.template, { locals: input.data, filename: 'scratchpad' + (i++) })";
+        var eval_string = "myswig.render(input.template, { locals: input.data, filename: 'scratchpad' + (i++) })";
         this.eval({data: eval_string, callback: function(out) {callback(out);}, input: {template: template, data: data}, onerror: function(err){error(err);}});
     },
 
@@ -399,7 +407,8 @@ var factory = {
     KEY_API_TOKEN : "apiToken",
     KEY_DEFAULT_TEMPLATE : "defaultTemplate",
     KEY_DEFAULT_SCRAPER : "defaultScraper",
-    KEY_APPEND_DESCRIPTION : "appendDescriptionOn",
+    KEY_REPLACE_DESCRIPTION : "replaceDescriptionOn",
+    KEY_SETTINGS_INIT_VER : "settingsInitializedVer",
 
     CACHE_TIMEOUT : 1000*60*60*24, // 24 hours
 
@@ -425,6 +434,19 @@ var factory = {
         {
             name : 'st3_torrent_overview',
             regex : /http(s)?\:\/\/(.*\.)?synthesiz3r\.com\/torrents\.php\?id=.*/i
+        },
+        {
+            name : 'waffles_upload',
+//            regex : /http(s)?\:\/\/(.*\.)?waffles\.ch\/upload\.php\?legacy=1.*/i
+//        },
+//        {
+//            TODO: reenable support for the new Waffles upload page once it is reactivated
+//            name : 'waffles_upload_new',
+            regex : /http(s)?\:\/\/(.*\.)?waffles\.ch\/upload\.php.*/i
+        },
+        {
+            name : 'waffles_request',
+            regex : /http(s)?\:\/\/(.*\.)?waffles\.ch\/requests\.php\?do=add/i
         }
     ),
 
@@ -434,83 +456,96 @@ var factory = {
                 return this.locations[i].name;
             }
         }
-        return "";
+        return null;
     },
 
     init : function() {
         this.currentLocation = this.determineLocation(document.URL);
-        this.insertIntoPage(this.getInputElements());
+        // only continue with the initialization if we found a valid location
+        if (this.currentLocation !== null) {
+            this.insertIntoPage(this.getInputElements());
 
-        // set the necessary styles
-        this.setStyles();
+            // set the necessary styles
+            this.setStyles();
 
-        // populate settings inputs
-        this.populateSettings();
+            // make sure we initialize the settings to the most recent version
+            this.initializeSettings();
 
-        // add the appropriate action for the button
-        var button = document.getElementById('yadg_submit');
-        button.addEventListener('click',function(e) { e.preventDefault(); yadg.makeRequest();},false);
+            // populate settings inputs
+            this.populateSettings();
 
-        // add the action for the options toggle
-        var toggleLink = document.getElementById('yadg_toggle_options');
-        if (toggleLink !== null) {
-            toggleLink.addEventListener('click', function(e) {
+            // add the appropriate action for the button
+            var button = document.getElementById('yadg_submit');
+            button.addEventListener('click', function (e) {
                 e.preventDefault();
+                yadg.makeRequest();
+            }, false);
 
-                var optionsDiv = document.getElementById('yadg_options'),
-                    display = optionsDiv.style.display;
+            // add the action for the options toggle
+            var toggleLink = document.getElementById('yadg_toggle_options');
+            if (toggleLink !== null) {
+                toggleLink.addEventListener('click', function (e) {
+                    e.preventDefault();
 
-                if (display == 'none' || display == '') {
-                    optionsDiv.style.display = 'block';
-                } else {
-                    optionsDiv.style.display = 'none';
-                }
-            });
-        }
+                    var optionsDiv = document.getElementById('yadg_options'),
+                        display = optionsDiv.style.display;
 
-        // add the action for the template select
-        var formatSelect = this.getFormatSelect();
-        if (formatSelect !== null) {
-            formatSelect.addEventListener('change', function(e) {
-                if (yadg_renderer.hasCached()) {
-                    yadg_renderer.renderCached(this.value, factory.setDescriptionBoxValue, factory.setDescriptionBoxValue);
-                }
-            });
-        }
+                    if (display == 'none' || display == '') {
+                        optionsDiv.style.display = 'block';
+                    } else {
+                        optionsDiv.style.display = 'none';
+                    }
+                });
+            }
 
-        // add the action to the save settings link
-        var saveSettingsLink = document.getElementById('yadg_save_settings');
-        if (saveSettingsLink !== null) {
-            saveSettingsLink.addEventListener('click', function(e) {
-                e.preventDefault();
+            // add the action for the template select
+            var formatSelect = this.getFormatSelect();
+            if (formatSelect !== null) {
+                formatSelect.addEventListener('change', function (e) {
+                    if (yadg_renderer.hasCached()) {
+                        yadg_renderer.renderCached(this.value, factory.setDescriptionBoxValue, factory.setDescriptionBoxValue);
+                    }
+                });
+            }
 
-                factory.saveSettings();
+            // add the action to the save settings link
+            var saveSettingsLink = document.getElementById('yadg_save_settings');
+            if (saveSettingsLink !== null) {
+                saveSettingsLink.addEventListener('click', function (e) {
+                    e.preventDefault();
 
-                alert("Settings saved successfully.");
-            });
-        }
+                    factory.saveSettings();
 
-        // add the action to the clear cache link
-        var clearCacheLink = document.getElementById('yadg_clear_cache');
-        if (clearCacheLink !== null) {
-            clearCacheLink.addEventListener('click', function(e) {
-                e.preventDefault();
+                    alert("Settings saved successfully.");
+                });
+            }
 
-                yadg_util.storage.removeAll();
+            // add the action to the clear cache link
+            var clearCacheLink = document.getElementById('yadg_clear_cache');
+            if (clearCacheLink !== null) {
+                clearCacheLink.addEventListener('click', function (e) {
+                    e.preventDefault();
 
-                alert("Cache cleared. Please reload the page for this to take effect.");
-            });
-        }
+                    yadg_util.storage.removeAll();
 
-        var last_checked = yadg_util.storage.getItem(factory.KEY_LAST_CHECKED);
-        if (last_checked === null || (new Date()).getTime() - (new Date(last_checked)).getTime() > factory.CACHE_TIMEOUT) {
-            // update the scraper and formats list
-            factory.UPDATE_PROGRESS = 1;
-            yadg.getScraperList(factory.setScraperSelect);
-            yadg.getFormatsList(factory.setFormatSelect);
+                    alert("Cache cleared. Please reload the page for this to take effect.");
+                });
+            }
+
+            var last_checked = yadg_util.storage.getItem(factory.KEY_LAST_CHECKED);
+            if (last_checked === null || (new Date()).getTime() - (new Date(last_checked)).getTime() > factory.CACHE_TIMEOUT) {
+                // update the scraper and formats list
+                factory.UPDATE_PROGRESS = 1;
+                yadg.getScraperList(factory.setScraperSelect);
+                yadg.getFormatsList(factory.setFormatSelect);
+            } else {
+                factory.setScraperSelect(yadg_util.storage.getItem(factory.KEY_SCRAPER_LIST));
+                factory.setFormatSelect(yadg_util.storage.getItem(factory.KEY_FORMAT_LIST));
+            }
+
+            return true;
         } else {
-            factory.setScraperSelect(yadg_util.storage.getItem(factory.KEY_SCRAPER_LIST));
-            factory.setFormatSelect(yadg_util.storage.getItem(factory.KEY_FORMAT_LIST));
+            return false;
         }
     },
 
@@ -518,26 +553,58 @@ var factory = {
         return document.getElementById('yadg_api_token');
     },
 
-    getAppendDescriptionCheckbox : function() {
-        return document.getElementById('yadg_options_append');
+    getReplaceDescriptionCheckbox : function() {
+        return document.getElementById('yadg_options_replace');
     },
 
-    getAppendDescriptionSettingKey : function() {
-        return this.KEY_APPEND_DESCRIPTION + this.currentLocation.replace("_", "");
+    getReplaceDescriptionSettingKey : function() {
+        return this.makeReplaceDescriptionSettingsKey(this.currentLocation);
+    },
+
+    makeReplaceDescriptionSettingsKey : function(subKey) {
+        return this.KEY_REPLACE_DESCRIPTION + subKey.replace(/_/g, "");
+    },
+
+    initializeSettings : function() {
+        var settings_ver = yadg_util.settings.getItem(factory.KEY_SETTINGS_INIT_VER),
+            current_ver = 1;
+
+        if (!settings_ver) {
+            settings_ver = 0;
+        }
+
+        if (settings_ver < current_ver) {
+            // replace descriptions on upload and new request pages
+            var locations = [
+                'st3_upload',
+                'st3_request',
+                'waffles_upload',
+                'waffles_upload_new',
+                'waffles_request'
+            ];
+            for (var i = 0; i < locations.length; i++) {
+                var loc = locations[i],
+                    replace_desc_setting_key = factory.makeReplaceDescriptionSettingsKey(loc);
+
+                yadg_util.settings.addItem(replace_desc_setting_key, true);
+            }
+        }
+
+        yadg_util.settings.addItem(factory.KEY_SETTINGS_INIT_VER, current_ver);
     },
 
     populateSettings : function() {
         var api_token = yadg_util.settings.getItem(factory.KEY_API_TOKEN),
-            append_desc = yadg_util.settings.getItem(factory.getAppendDescriptionSettingKey());
+            replace_desc = yadg_util.settings.getItem(factory.getReplaceDescriptionSettingKey());
 
         if (api_token) {
             var api_token_input = factory.getApiTokenInput();
             api_token_input.value = api_token;
         }
 
-        if (append_desc) {
-            var append_desc_checkbox = factory.getAppendDescriptionCheckbox();
-            append_desc_checkbox.checked = true;
+        if (replace_desc) {
+            var replace_desc_checkbox = factory.getReplaceDescriptionCheckbox();
+            replace_desc_checkbox.checked = true;
         }
     },
 
@@ -545,12 +612,12 @@ var factory = {
         var scraper_select = factory.getScraperSelect(),
             template_select = factory.getFormatSelect(),
             api_token_input = factory.getApiTokenInput(),
-            append_desc_checkbox = factory.getAppendDescriptionCheckbox();
+            replace_desc_checkbox = factory.getReplaceDescriptionCheckbox();
 
         var current_scraper = null,
             current_template = null,
             api_token = api_token_input.value.trim(),
-            append_description = append_desc_checkbox.checked;
+            replace_description = replace_desc_checkbox.checked;
 
         if (scraper_select.options.length > 0) {
             current_scraper = scraper_select.options[scraper_select.selectedIndex].value;
@@ -574,25 +641,25 @@ var factory = {
             yadg_util.settings.removeItem(factory.KEY_API_TOKEN);
         }
 
-        var append_desc_setting_key = factory.getAppendDescriptionSettingKey();
-        if (append_description) {
-            yadg_util.settings.addItem(append_desc_setting_key, true);
+        var replace_desc_setting_key = factory.getReplaceDescriptionSettingKey();
+        if (replace_description) {
+            yadg_util.settings.addItem(replace_desc_setting_key, true);
         } else {
-            yadg_util.settings.removeItem(append_desc_setting_key);
+            yadg_util.settings.removeItem(replace_desc_setting_key);
         }
     },
 
     setDescriptionBoxValue : function(value) {
         var desc_box = factory.getDescriptionBox(),
-            append_desc_checkbox = factory.getAppendDescriptionCheckbox(),
-            append_desc = false;
+            replace_desc_checkbox = factory.getReplaceDescriptionCheckbox(),
+            replace_desc = false;
 
-        if (append_desc_checkbox !== null) {
-            append_desc = append_desc_checkbox.checked;
+        if (replace_desc_checkbox !== null) {
+            replace_desc = replace_desc_checkbox.checked;
         }
 
         if (desc_box !== null) {
-            if (append_desc && /\S/.test(desc_box.value)) { // check if the current description contains more than whitespace
+            if (!replace_desc && /\S/.test(desc_box.value)) { // check if the current description contains more than whitespace
                 desc_box.value += "\n\n" + value;
             } else {
                 desc_box.value = value;
@@ -614,7 +681,12 @@ var factory = {
         } else {
             // we have no settings so fall back to the hard coded defaults
             switch (this.currentLocation) {
-                
+                case "waffles_upload":
+                case "waffles_upload_new":
+                case "waffles_request":
+                    format_select.selectedIndex = format_offsets[defaultWafflesFormat];
+                    break;
+
                 default:
                     format_select.selectedIndex = format_offsets[defaultST3Format];
                     break;
@@ -667,6 +739,7 @@ var factory = {
                     id : templates[i]['id'],
                     url : templates[i]['url'],
                     name : templates[i]['name'],
+                    nameFormatted : templates[i]['nameFormatted'],
                     owner : templates[i]['owner'],
                     default : templates[i]['default'],
                     isUtility : templates[i]['isUtility']
@@ -698,10 +771,10 @@ var factory = {
 
         for (var i = 0; i < data.length; i++) {
             // we are not using the javascript constructor to create an Option instance because this will create an
-            // incompatibility with jQuery in Chrome which will make it impossible to add a new artist field on ST3
+            // incompatibility with jQuery in Chrome which will make it impossible to add a new artist field on synthesiz3r.com
             var o = document.createElement("option");
-            if ('owner' in data[i]) {
-                o.text = data[i]['name'] + " [" + data[i]['owner'] + "]";
+            if ('nameFormatted' in data[i]) {
+                o.text = data[i]['nameFormatted'];
             } else {
                 o.text = data[i]['name'];
             }
@@ -719,11 +792,18 @@ var factory = {
 
     setStyles : function() {
         // general styles
-        yadg_util.addCSS('div#yadg_options{ display:none; margin-top:3px; } input#yadg_input,input#yadg_submit,label#yadg_format_label,a#yadg_scraper_info { margin-right: 5px } div#yadg_response { margin-top:3px; } select#yadg_scraper { margin-right: 2px } #yadg_options_template,#yadg_options_api_token,#yadg_options_append_div { margin-bottom: 3px; }');
+        yadg_util.addCSS('div#yadg_options{ display:none; margin-top:3px; } input#yadg_input,input#yadg_submit,label#yadg_format_label,a#yadg_scraper_info { margin-right: 5px } div#yadg_response { margin-top:3px; } select#yadg_scraper { margin-right: 2px } #yadg_options_template,#yadg_options_api_token,#yadg_options_replace_div { margin-bottom: 3px; }');
 
         // location specific styles will go here
         switch(this.currentLocation) {
-            
+            case "waffles_upload":
+                yadg_util.addCSS('div#yadg_response ul { margin-left: 0 !important; padding-left: 0 !important; }');
+                break;
+
+            case "waffles_request":
+                yadg_util.addCSS('div#yadg_response ul { margin-left: 0 !important; padding-left: 0 !important; }');
+                break;
+
             default:
 
                 break;
@@ -733,7 +813,7 @@ var factory = {
     getInputElements : function() {
         var buttonHTML = '<input type="submit" value="Fetch" id="yadg_submit"/>',
             scraperSelectHTML = '<select name="yadg_scraper" id="yadg_scraper"></select>',
-            optionsHTML = '<div id="yadg_options"><div id="yadg_options_template"><label for="yadg_format" id="yadg_format_label">Template:</label><select name="yadg_format" id="yadg_format"></select></div><div id="yadg_options_api_token"><label for="yadg_api_token" id="yadg_api_token_label">API token (<a href="https://yadg.cc/api/token" target="_blank">Get one here</a>):</label> <input type="text" name="yadg_api_token" id="yadg_api_token" size="50" /></div><div id="yadg_options_append_div"><input type="checkbox" name="yadg_options_append" id="yadg_options_append" /> <label for="yadg_options_append" id="yadg_options_append_label">Append descriptions on this page</label></div><div id="yadg_options_links"><a id="yadg_save_settings" href="#" title="Save the currently selected scraper and template as default for this site and save the given API token.">Save settings</a> <span class="yadg_separator">|</span> <a id="yadg_clear_cache" href="#">Clear cache</a></div></div>',
+            optionsHTML = '<div id="yadg_options"><div id="yadg_options_template"><label for="yadg_format" id="yadg_format_label">Template:</label><select name="yadg_format" id="yadg_format"></select></div><div id="yadg_options_api_token"><label for="yadg_api_token" id="yadg_api_token_label">API token (<a href="https://yadg.cc/api/token" target="_blank">Get one here</a>):</label> <input type="text" name="yadg_api_token" id="yadg_api_token" size="50" /></div><div id="yadg_options_replace_div"><input type="checkbox" name="yadg_options_replace" id="yadg_options_replace" /> <label for="yadg_options_replace" id="yadg_options_replace_label">Replace descriptions on this page</label></div><div id="yadg_options_links"><a id="yadg_save_settings" href="#" title="Save the currently selected scraper and template as default for this site and save the given API token.">Save settings</a> <span class="yadg_separator">|</span> <a id="yadg_clear_cache" href="#">Clear cache</a></div></div>',
             inputHTML = '<input type="text" name="yadg_input" id="yadg_input" size="60" />',
             responseDivHTML = '<div id="yadg_response"></div>',
             toggleOptionsLinkHTML = '<a id="yadg_toggle_options" href="#">Toggle options</a>',
@@ -765,7 +845,25 @@ var factory = {
                 tr.className = "yadg_tr";
                 tr.innerHTML = '<td class="label">YADG:</td><td>' + inputHTML + scraperSelectHTML + scraperInfoLink + buttonHTML + toggleOptionsLinkHTML + optionsHTML + responseDivHTML + '</td>';
                 return tr;
-            
+
+            case "waffles_upload":
+                var tr = document.createElement('tr');
+                tr.className = "yadg_tr";
+                tr.innerHTML = '<td class="heading" valign="top" align="right"><label for="yadg_input">YADG:</label></td><td>' + inputHTML + scraperSelectHTML + scraperInfoLink + buttonHTML + toggleOptionsLinkHTML + optionsHTML + responseDivHTML + '</td>';
+                return tr;
+
+            case "waffles_upload_new":
+                var p = document.createElement('p');
+                p.className = "yadg_p";
+                p.innerHTML = '<label for="yadg_input">YADG:</label>' + inputHTML + scraperSelectHTML + scraperInfoLink + buttonHTML + toggleOptionsLinkHTML + optionsHTML + responseDivHTML;
+                return p;
+
+            case "waffles_request":
+                var tr = document.createElement('tr');
+                tr.className = "yadg_tr";
+                tr.innerHTML = '<td style="text-align:left;width:100px;">YADG:</td><td style="text-align:left;">' + inputHTML + scraperSelectHTML + scraperInfoLink + buttonHTML + toggleOptionsLinkHTML + optionsHTML + responseDivHTML + '</td>';
+                return tr;
+
             default:
                 // that should actually never happen
                 return document.createElement('div');
@@ -795,6 +893,28 @@ var factory = {
                 artist_tr.parentNode.insertBefore(element,artist_tr);
                 break;
 
+            case "waffles_upload":
+                var submit_button = document.getElementsByName('submit')[0];
+                submit_button.parentNode.parentNode.parentNode.insertBefore(element,submit_button.parentNode.parentNode);
+                break;
+
+            case "waffles_upload_new":
+                var h4s = document.getElementsByTagName('h4');
+                var div;
+                for (var i=0; i < h4s.length; i++) {
+                    if (h4s[i].innerHTML.indexOf('read the rules') !== -1) {
+                        div = h4s[i].parentNode;
+                        break;
+                    }
+                }
+                div.appendChild(element);
+                break;
+
+            case "waffles_request":
+                var category_select = document.getElementsByName('category')[0];
+                category_select.parentNode.parentNode.parentNode.insertBefore(element,category_select.parentNode.parentNode);
+                break;
+
             default:
                 break;
         }
@@ -817,6 +937,15 @@ var factory = {
             case "st3_request":
             case "st3_request_edit":
                 return document.getElementsByName('description')[0];
+
+            case "waffles_upload":
+                return document.getElementById('descr');
+
+            case "waffles_upload_new":
+                return document.getElementById('id_descr');
+
+            case "waffles_request":
+                return document.getElementsByName('information')[0];
 
             default:
                 // that should actually never happen
@@ -858,7 +987,7 @@ var factory = {
 
                                 artist_input.value = artist_key;
 
-                                option_offsets = yadg_util.getOptionOffsets(type_select);
+                                var option_offsets = yadg_util.getOptionOffsets(type_select);
 
                                 if (artist_type === "main") {
                                     type_select.selectedIndex = option_offsets[1];
@@ -934,7 +1063,7 @@ var factory = {
 
                                 artist_input.value = artist_key;
 
-                                option_offsets = yadg_util.getOptionOffsets(type_select);
+                                var option_offsets = yadg_util.getOptionOffsets(type_select);
 
                                 if (artist_type === "main") {
                                     type_select.selectedIndex = option_offsets[1];
@@ -992,7 +1121,7 @@ var factory = {
 
                                 artist_input.value = artist_key;
 
-                                option_offsets = yadg_util.getOptionOffsets(type_select);
+                                var option_offsets = yadg_util.getOptionOffsets(type_select);
 
                                 if (artist_type === "main") {
                                     type_select.selectedIndex = option_offsets[1];
@@ -1025,6 +1154,101 @@ var factory = {
                     yadg_util.setValueIfSet(data.title,album_title_input,data.title != false);
                     yadg_util.setValueIfSet(data.label,label_input,data.label != false);
                     yadg_util.setValueIfSet(data.catalog,catalog_input,data.catalog != false);
+                };
+                return f;
+
+            case "waffles_upload":
+                var f = function(rawData) {
+                    var artist_input = document.getElementsByName("artist")[0],
+                        album_title_input = document.getElementsByName("album")[0],
+                        year_input = document.getElementsByName("year")[0],
+                        va_checkbox = document.getElementById("va"),
+                        tags_input = document.getElementById("tags"),
+                        data = yadg.prepareRawResponse(rawData);
+
+                    if (data.artists != false) {
+                        if (data.is_various) {
+                            artist_input.value = "";
+                            va_checkbox.checked = true;
+                        } else {
+                            artist_input.value = data.flat_artist_string;
+                            va_checkbox.checked = false;
+                        }
+                    } else {
+                        va_checkbox.checked = false;
+                        artist_input.value = "";
+                    }
+
+                    yadg_util.setValueIfSet(data.year,year_input,data.year != false);
+                    yadg_util.setValueIfSet(data.title,album_title_input,data.title != false);
+
+                    if (data.tags != false) {
+                        tags_input.value = data.tag_string_nodots.toLowerCase();
+                    } else {
+                        tags_input.value = '';
+                    }
+
+                    yadg_util.exec(function() {formatName()});
+                };
+                return f;
+
+            case "waffles_upload_new":
+                var f = function(rawData) {
+                    var artist_input = document.getElementById("id_artist"),
+                        album_title_input = document.getElementById("id_album"),
+                        year_input = document.getElementById("id_year"),
+                        va_checkbox = document.getElementById("id_va"),
+                        tags_input = document.getElementById("id_tags"),
+                        data = yadg.prepareRawResponse(rawData);
+
+                    if (data.artists != false) {
+                        if (data.is_various) {
+                            if (!va_checkbox.checked) {
+                                va_checkbox.click();
+                            }
+                        } else {
+                            if (va_checkbox.checked) {
+                                va_checkbox.click();
+                            }
+                            artist_input.value = data.flat_artist_string;
+                        }
+                    } else {
+                        if (va_checkbox.checked) {
+                            va_checkbox.click();
+                        }
+                        artist_input.value = "";
+                    }
+
+                    yadg_util.setValueIfSet(data.year,year_input,data.year != false);
+                    yadg_util.setValueIfSet(data.title,album_title_input,data.title != false);
+
+                    if (data.tags != false) {
+                        tags_input.value = data.tag_string_nodots.toLowerCase();
+                    } else {
+                        tags_input.value = '';
+                    }
+                };
+                return f;
+
+            case "waffles_request":
+                var f = function(rawData) {
+                    var artist_input = document.getElementsByName("artist")[0],
+                        album_title_input = document.getElementsByName("title")[0],
+                        year_input = document.getElementsByName("year")[0],
+                        data = yadg.prepareRawResponse(rawData);
+
+                    if (data.artists != false) {
+                        if (data.is_various) {
+                            artist_input.value = "Various Artists";
+                        } else {
+                            artist_input.value = data.flat_artist_string;
+                        }
+                    } else {
+                        artist_input.value = "";
+                    }
+
+                    yadg_util.setValueIfSet(data.year,year_input,data.year != false);
+                    yadg_util.setValueIfSet(data.title,album_title_input,data.title != false);
                 };
                 return f;
 
@@ -1154,10 +1378,11 @@ var yadg = {
     makeRequest : function(params) {
         if (this.isBusy) return;
 
+        var data;
         if (params) {
-            var data = params;
+            data = params;
         } else {
-            var data = {
+            data = {
                 scraper: this.scraperSelect.options[this.scraperSelect.selectedIndex].value,
                 input: this.input.value
             };
@@ -1185,7 +1410,7 @@ var yadg = {
                         yadg.lastStateError = false;
                     }
 
-                    fillFunc = factory.getFormFillFunction();
+                    var fillFunc = factory.getFormFillFunction();
                     fillFunc(response.data);
                 } else if (response.data.type == 'ListResult') {
                     var ul = document.createElement('ul');
@@ -1336,11 +1561,13 @@ var yadg = {
         }
         for (var i = 0; i < rawData['releaseEvents'].length; i++) {
             var event = rawData['releaseEvents'][i];
-            result.year = event.date.match(/\d{4}/)[0];
-            if (result.year.length != 4) {
-                result.year = false;
-            } else {
-                break;
+            if (event.date) {
+                result.year = event.date.match(/\d{4}/)[0];
+                if (result.year.length != 4) {
+                    result.year = false;
+                } else {
+                    break;
+                }
             }
         }
         if (rawData.title) {
@@ -1423,6 +1650,7 @@ var yadg = {
 };
 
 yadg_sandbox.init(function() {
-    factory.init();
-    yadg.init();
+    if (factory.init()) { // returns true if we run on a valid location
+        yadg.init();
+    }
 });
